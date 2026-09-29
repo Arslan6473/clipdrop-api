@@ -3,6 +3,10 @@
 import re
 from typing import Any
 
+_VIDEO_ID = re.compile(r"^v(\d{3,4})$")
+# Source format IDs we pass through verbatim must be plain words (no yt-dlp selector syntax).
+_PLAIN_ID = re.compile(r"^[A-Za-z0-9_]{1,24}$")
+_FB_STATS = re.compile(r"^(?:[\d.,]+[KMB]?\s+(?:views|reactions|comments|shares)\s*·?\s*)+\|\s*", re.I)
 MAX_HEIGHT = 2160
 MAX_VIDEO_OPTIONS = 6
 
@@ -83,6 +87,28 @@ def build_formats(info: dict[str, Any], can_merge: bool = True) -> list[dict[str
             }
         )
 
+    # Some sources (e.g. Facebook Reels) only offer complete files labelled "hd"/"sd", with no
+    # resolution or codec info. Offer those when there's no other way to get video with sound.
+    if not result:
+        unlabelled = [
+            f for f in usable
+            if f.get("vcodec") is None and f.get("acodec") is None and f.get("ext") == "mp4"
+            and f.get("protocol", "https") in ("https", "http") and _PLAIN_ID.match(str(f["format_id"]))
+        ]
+        for f in sorted(unlabelled, key=lambda f: str(f["format_id"]).lower() != "hd"):
+            fid = str(f["format_id"])
+            name = {"hd": "HD", "sd": "SD"}.get(fid.lower(), fid.upper())
+            result.append(
+                {
+                    "id": f"p_{fid}",
+                    "label": name,
+                    "description": "HD Video" if name == "HD" else "SD Video" if name == "SD" else "Video",
+                    "container": "MP4",
+                    "sizeBytes": _size(f),
+                    "hasAudio": True,
+                }
+            )
+
     if best_audio:
         result.append(
             {
@@ -97,13 +123,14 @@ def build_formats(info: dict[str, Any], can_merge: bool = True) -> list[dict[str
     return result
 
 
-_VIDEO_ID = re.compile(r"^v(\d{3,4})$")
 
 
 def selector_for(format_id: str, can_merge: bool = True) -> str | None:
     """yt-dlp format selector for one of our IDs. IDs come from build_formats, never free text."""
     if format_id == "audio":
         return "ba[ext=m4a]/ba"
+    if format_id.startswith("p_") and _PLAIN_ID.match(format_id[2:]):
+        return format_id[2:]
     match = _VIDEO_ID.match(format_id or "")
     if not match:
         return None
@@ -126,6 +153,8 @@ def video_info(info: dict[str, Any], platform: str, platform_name: str, page_url
     if not title or re.fullmatch(r"(TikTok )?video #?\d+", title, re.I):
         caption = " ".join(str(info.get("description") or "").split())
         title = caption or (f"{platform_name} video by {author}" if author else title)
+    # Facebook prefixes titles with stats: "9.8K views · 342 reactions | Actual title".
+    title = _FB_STATS.sub("", title).strip() or title
     thumbs = [info.get("thumbnail")] + [t.get("url") for t in reversed(info.get("thumbnails") or [])]
     duration = info.get("duration")
     return {

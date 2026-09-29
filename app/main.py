@@ -135,7 +135,7 @@ class AnalyzeBody(BaseModel):
 
 class DownloadBody(BaseModel):
     url: str = Field(min_length=1, max_length=MAX_URL_LENGTH)
-    formatId: str = Field(min_length=1, max_length=16, pattern=r"^[A-Za-z0-9_.-]+$")
+    formatId: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9_.-]+$")
 
 
 def _checked(url: str) -> tuple[str, str]:

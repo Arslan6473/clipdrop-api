@@ -179,3 +179,32 @@ def test_tiktok_caption_used_as_title():
     assert video_info({"title": "Real title"}, "tiktok", "TikTok", "https://x")["title"] == "Real title"
     no_caption = {"title": "TikTok video #7047596209028074758", "uploader": "hankgreen1"}
     assert video_info(no_caption, "tiktok", "TikTok", "https://x")["title"] == "TikTok video by hankgreen1"
+
+
+REEL = {"formats": [
+    {"format_id": "sd", "ext": "mp4", "vcodec": None, "acodec": None, "protocol": "https"},
+    {"format_id": "hd", "ext": "mp4", "vcodec": None, "acodec": None, "protocol": "https"},
+    {"format_id": "139v", "ext": "mp4", "vcodec": "vp09", "acodec": "none", "height": 636, "width": 360},
+]}
+
+
+def test_facebook_reel_unlabelled_files_are_offered():
+    formats = build_formats(REEL, can_merge=True)
+    assert [(f["id"], f["label"]) for f in formats] == [("p_hd", "HD"), ("p_sd", "SD")]
+    assert selector_for("p_hd") == "hd"
+
+
+def test_unlabelled_files_not_offered_when_real_resolutions_exist():
+    assert [f["id"] for f in build_formats(INFO, can_merge=True)] == ["v1080", "v360", "audio"]
+
+
+@pytest.mark.parametrize("bad", ["p_", "p_hd/best", "p_hd+ba", "p_a[height>1]", "p_" + "a" * 30])
+def test_passthrough_ids_reject_selector_syntax(bad):
+    assert selector_for(bad) is None
+
+
+def test_facebook_stats_prefix_removed_from_title():
+    from app.formats import video_info
+    info = {"title": "9.8K views · 342 reactions | When your trying to help"}
+    assert video_info(info, "facebook", "Facebook", "https://x")["title"] == "When your trying to help"
+    assert video_info({"title": "Plain | title"}, "facebook", "Facebook", "https://x")["title"] == "Plain | title"
