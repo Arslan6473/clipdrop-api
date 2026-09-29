@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-from app.errors import map_ytdlp_error
+from app.errors import ApiError, map_ytdlp_error
 from app.extractor import sanitize_filename
 from app.formats import build_formats, selector_for
 from app.jobs import Job, JobStore
@@ -208,3 +208,59 @@ def test_facebook_stats_prefix_removed_from_title():
     info = {"title": "9.8K views · 342 reactions | When your trying to help"}
     assert video_info(info, "facebook", "Facebook", "https://x")["title"] == "When your trying to help"
     assert video_info({"title": "Plain | title"}, "facebook", "Facebook", "https://x")["title"] == "Plain | title"
+
+
+def test_share_link_detection():
+    from app.extractor import is_share_link
+    assert is_share_link("https://www.facebook.com/share/v/19AHwjGV3B/")
+    assert is_share_link("https://m.facebook.com/share/r/AbC123/")
+    assert not is_share_link("https://www.facebook.com/reel/1073848828822927")
+    assert not is_share_link("https://evil.example/share/v/19AHwjGV3B/")
+    assert not is_share_link("https://www.facebook.com/share/v/19AHwjGV3B/../../x")
+
+
+def test_share_link_must_stay_on_facebook(monkeypatch):
+    from app import extractor
+
+    class FakeRes:
+        def __init__(self, url):
+            self.url = url
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    class FakeYDL:
+        target = ""
+        def __init__(self, *a, **k):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def urlopen(self, url):
+            return FakeRes(FakeYDL.target)
+
+    monkeypatch.setattr(extractor.yt_dlp, "YoutubeDL", FakeYDL)
+    link = "https://www.facebook.com/share/v/19AHwjGV3B/"
+
+    FakeYDL.target = "https://www.facebook.com/reel/1073848828822927/?rdid=x&share_url=y"
+    assert extractor.resolve_share_link(link) == "https://www.facebook.com/reel/1073848828822927/"
+
+    FakeYDL.target = "https://evil.example/steal"
+    with pytest.raises(ApiError) as err:
+        extractor.resolve_share_link(link)
+    assert err.value.code == "UNSUPPORTED_URL"
+
+    FakeYDL.target = "https://www.facebook.com/login/?next=x"
+    with pytest.raises(ApiError) as err:
+        extractor.resolve_share_link(link)
+    assert err.value.code == "PRIVATE_CONTENT"
+
+
+def test_download_filename_uses_cleaned_title():
+    from app.extractor import _display_title
+    fb = "https://www.facebook.com/reel/1"
+    assert _display_title({"title": "17K views · 1.3K reactions | Real title"}, fb) == "Real title"
+    assert _display_title({"title": "TikTok video #123", "uploader": "hank"}, "https://www.tiktok.com/@h/video/1") == "TikTok video by hank"
+    assert _display_title({}, fb) == "Facebook video"

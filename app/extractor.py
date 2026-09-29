@@ -8,6 +8,7 @@ import threading
 import time
 import unicodedata
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import yt_dlp
 from yt_dlp.utils import DownloadError, ExtractorError
@@ -16,7 +17,7 @@ from .config import settings
 from .errors import ApiError, map_ytdlp_error
 from .formats import build_formats, selector_for, video_info
 from .jobs import Job, JobStore
-from .validation import PLATFORM_NAMES
+from .validation import PLATFORM_NAMES, validate_url
 
 log = logging.getLogger("clipdrop.extractor")
 
@@ -81,7 +82,43 @@ def _single(info: dict[str, Any]) -> dict[str, Any]:
     return info
 
 
+_SHARE_PATH = re.compile(r"^/share/[a-z]/[A-Za-z0-9_-]+/?$")
+_FB_TRACKING = {"rdid", "share_url", "mibextid", "sfnsn", "s", "fs"}
+
+
+def is_share_link(url: str) -> bool:
+    """facebook.com/share/v/…, /share/r/… links from the app's Share button (yt-dlp can't read them)."""
+    parts = urlsplit(url)
+    host = (parts.hostname or "").removeprefix("www.").removeprefix("m.")
+    return host == "facebook.com" and bool(_SHARE_PATH.match(parts.path))
+
+
+def resolve_share_link(url: str) -> str:
+    """Follows a Facebook share link to the real video URL, which must still be on Facebook.
+
+    Only called for facebook.com/share/… URLs, so the first request always goes to Facebook. The
+    redirect target is re-validated, so this can't be used to reach any other host.
+    """
+    try:
+        with yt_dlp.YoutubeDL(_base_options()) as ydl, ydl.urlopen(url) as res:
+            final = res.url
+    except Exception:
+        raise ApiError("NOT_FOUND", "share link did not resolve") from None
+    checked = validate_url(final)
+    if not checked or checked[1] != "facebook":
+        raise ApiError("UNSUPPORTED_URL", "share link left facebook")
+    parts = urlsplit(checked[0])
+    if parts.path.startswith(("/login", "/checkpoint")):
+        raise ApiError("PRIVATE_CONTENT", "share link needs login")
+    if is_share_link(checked[0]):
+        raise ApiError("NOT_FOUND", "share link did not redirect")
+    query = urlencode([(k, v) for k, v in parse_qsl(parts.query) if k not in _FB_TRACKING])
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+
 def extract(url: str) -> dict[str, Any]:
+    if is_share_link(url):
+        url = resolve_share_link(url)
     try:
         with yt_dlp.YoutubeDL(_base_options()) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -116,6 +153,13 @@ def sanitize_filename(name: str, ext: str) -> str:
     if not base or re.fullmatch(r"(?i)con|prn|aux|nul|com\d|lpt\d", base):
         base = "video"
     return f"{base}.{ext}"
+
+
+def _display_title(info: dict[str, Any], url: str) -> str:
+    """Same cleaned title the UI shows (no Facebook stats prefix, TikTok captions), for filenames."""
+    checked = validate_url(url)
+    platform = checked[1] if checked else ""
+    return video_info(info, platform, PLATFORM_NAMES.get(platform, "Video"), url)["title"]
 
 
 def download(url: str, format_id: str, store: JobStore) -> Job:
@@ -168,7 +212,7 @@ def download(url: str, format_id: str, store: JobStore) -> Job:
             id=job_id,
             directory=directory,
             path=path,
-            filename=sanitize_filename(f"{info.get('title') or 'video'}{suffix}", ext),
+            filename=sanitize_filename(f"{_display_title(info, url)}{suffix}", ext),
             content_type=CONTENT_TYPES.get(ext, "application/octet-stream"),
             size=size,
             expires_at=time.time() + settings.file_ttl_seconds,
