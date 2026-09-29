@@ -1,6 +1,6 @@
 # ClipDrop downloader API
 
-A small FastAPI service that uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and ffmpeg to list and prepare downloads of **public** videos from YouTube, TikTok, Instagram and Facebook. The Next.js site calls it server-side; browsers download prepared files from it directly.
+A small FastAPI service that uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and ffmpeg to list and prepare downloads of **public** videos from YouTube, TikTok, Instagram and Facebook. The [ClipDrop website](https://github.com/Arslan6473/clipdrop) calls it server-side; browsers download prepared files from it directly.
 
 - No cookies, logins or credentials, so private and members-only content is never reachable.
 - DRM formats are skipped, and yt-dlp's generic extractor is disabled, so it only contacts known platforms.
@@ -18,9 +18,8 @@ A small FastAPI service that uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and
 ## Run locally
 
 ```bash
-cd downloader-api
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
-API_KEY=dev PUBLIC_BASE_URL=http://127.0.0.1:8765 .venv/bin/uvicorn app.main:app --port 8765
+API_KEY=dev PUBLIC_BASE_URL=http://127.0.0.1:8765 .venv/bin/python -m uvicorn app.main:app --port 8765
 .venv/bin/python -m pytest
 ```
 
@@ -28,13 +27,16 @@ Then run the Next.js app with `DOWNLOADER_API_URL=http://127.0.0.1:8765 DOWNLOAD
 
 ## Deploy on Railway
 
-1. Create a new service from this repo and set **Root Directory** to `downloader-api`. Railway picks up `Dockerfile` and `railway.json`, including the `/health` check.
-2. Under **Settings → Networking**, generate a public domain.
-3. Add these variables:
-   - `API_KEY`: a long random string (e.g. `openssl rand -hex 32`)
-   - `PUBLIC_BASE_URL`: the Railway domain, e.g. `https://clipdrop-api.up.railway.app`
-   - `ALLOWED_ORIGINS`: your site, e.g. `https://clipdrop.example`
-4. In the Next.js project (e.g. on Vercel), set `DOWNLOADER_API_URL` to the Railway URL and `DOWNLOADER_API_KEY` to the same key, then redeploy it. The site's copy switches to the "downloads available" wording at build time.
+1. **New Project → Deploy from GitHub repo → `Arslan6473/clipdrop-api`.** Railway detects the `Dockerfile` automatically. No Root Directory is needed.
+2. **Settings → Deploy → Healthcheck Path:** `/health`. Leave **Serverless** off, because prepared files must survive until users download them.
+3. **Settings → Networking → Generate Domain** on port `8000`.
+4. **Variables:**
+   - `API_KEY`: a long random string (`openssl rand -hex 32`)
+   - `PUBLIC_BASE_URL`: the Railway domain, e.g. `https://clipdrop-api-production.up.railway.app`
+   - `ALLOWED_ORIGINS`: your website, e.g. `https://clipdrop.example`
+   - `MAX_CONCURRENT_DOWNLOADS`: `2` on a 1 GB plan
+5. Check `https://<domain>/health`. It should return `"ok": true` and `"ffmpeg": true`.
+6. In the website project ([Arslan6473/clipdrop](https://github.com/Arslan6473/clipdrop), e.g. on Vercel), set `DOWNLOADER_API_URL` to the Railway URL and `DOWNLOADER_API_KEY` to the same key, then redeploy the website.
 
 Optional limits: `MAX_FILESIZE_MB` (1024), `MAX_DURATION_SECONDS` (10800), `MAX_CONCURRENT_DOWNLOADS` (3), `DOWNLOAD_TIMEOUT_SECONDS` (240), `RATE_LIMIT_PER_MINUTE` (60).
 
